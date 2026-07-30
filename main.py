@@ -6,12 +6,22 @@ import pandas as pd
 def init_db():
     conn = sqlite3.connect('recipes.db')
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, unit TEXT NOT NULL)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, unit TEXT NOT NULL, default_quantity REAL DEFAULT 1.0)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS sub_recipes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS recipes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS recipe_ingredients (recipe_id INTEGER, product_id INTEGER, quantity REAL, PRIMARY KEY (recipe_id, product_id))''')
+    # Alterando tabelas para suportar unidade customizada no vínculo
+    cursor.execute('''CREATE TABLE IF NOT EXISTS recipe_ingredients (recipe_id INTEGER, product_id INTEGER, quantity REAL, unit TEXT, PRIMARY KEY (recipe_id, product_id))''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS recipe_sub_recipes (recipe_id INTEGER, sub_recipe_id INTEGER, quantity REAL, PRIMARY KEY (recipe_id, sub_recipe_id))''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS sub_recipe_ingredients (sub_recipe_id INTEGER, product_id INTEGER, quantity REAL, PRIMARY KEY (sub_recipe_id, product_id))''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sub_recipe_ingredients (sub_recipe_id INTEGER, product_id INTEGER, quantity REAL, unit TEXT, PRIMARY KEY (sub_recipe_id, product_id))''')
+    
+    # Migração básica caso as colunas 'unit' não existam nas tabelas de junção
+    try:
+        cursor.execute('ALTER TABLE recipe_ingredients ADD COLUMN unit TEXT')
+    except: pass
+    try:
+        cursor.execute('ALTER TABLE sub_recipe_ingredients ADD COLUMN unit TEXT')
+    except: pass
+
     conn.commit()
     conn.close()
 
@@ -41,11 +51,12 @@ def get_all(table):
     return df
 
 def format_br(value):
-    """Formata números para o padrão brasileiro: 1.234,56"""
     try:
         return "{:,.2f}".format(value).replace(",", "X").replace(".", ",").replace("X", ".")
     except:
         return value
+
+UNITS = ['kg', 'g', 'L', 'ml', 'un', 'pct', 'cx','cda']
 
 # --- Interface Streamlit ---
 st.set_page_config(page_title='Gestor de Receitas Profissional', layout='wide')
@@ -55,14 +66,31 @@ tabs = st.tabs(['🔍 Visualizar Receitas', '📝 Montar Receita', '🍲 Gerenci
 
 with tabs[3]:
     st.header('📦 Cadastro de Produtos')
-    with st.form('f_prod', clear_on_submit=True):
-        n = st.text_input('Nome do Produto')
-        u = st.selectbox('Unidade de Medida', ['kg', 'g', 'L', 'ml', 'un', 'pct', 'cx','cda'])
-        if st.form_submit_button('Salvar'):
-            if n:
-                run_query('INSERT INTO products (name, unit) VALUES (?, ?)', (n, u))
-                st.rerun()
-    st.dataframe(get_all('products'), use_container_width=True)
+    c_p1, c_p2 = st.columns([1, 2])
+    with c_p1:
+        with st.form('f_prod', clear_on_submit=True):
+            n = st.text_input('Nome do Produto')
+            col_q1, col_q2 = st.columns(2)
+            dq = col_q1.number_input('Qtd Base', min_value=0.01, value=1.0, step=0.01, format="%.2f")
+            u = col_q2.selectbox('Unidade', UNITS)
+            if st.form_submit_button('Salvar'):
+                if n:
+                    run_query('INSERT INTO products (name, unit, default_quantity) VALUES (?, ?, ?)', (n, u, dq))
+                    st.rerun()
+    
+    with c_p2:
+        prods = get_all('products')
+        if not prods.empty:
+            st.write("Produtos Cadastrados:")
+            for _, p_row in prods.iterrows():
+                col_a, col_b = st.columns([3, 1])
+                txt = f"{p_row['name']} - {format_br(p_row['default_quantity'])} {p_row['unit']}"
+                col_a.write(txt)
+                if col_b.button('Excluir', key=f"del_p_{p_row['id']}"):
+                    run_query('DELETE FROM products WHERE id = ?', (int(p_row['id']),))
+                    run_query('DELETE FROM recipe_ingredients WHERE product_id = ?', (int(p_row['id']),))
+                    run_query('DELETE FROM sub_recipe_ingredients WHERE product_id = ?', (int(p_row['id']),))
+                    st.rerun()
 
 with tabs[2]:
     st.header('🍲 Gerenciar Sub-Receitas')
@@ -75,27 +103,36 @@ with tabs[2]:
 
     srs = get_all('sub_recipes')
     if not srs.empty:
-        sel_sr = st.selectbox('Selecione Sub-Receita para editar itens:', srs['id'], format_func=lambda x: srs[srs['id']==x]['name'].values[0])
+        col_sr_sel, col_sr_del = st.columns([3, 1])
+        sel_sr = col_sr_sel.selectbox('Selecione Sub-Receita:', srs['id'], format_func=lambda x: srs[srs['id']==x]['name'].values[0])
+        if col_sr_del.button('Excluir Sub-Receita Total'):
+            run_query('DELETE FROM sub_recipes WHERE id = ?', (int(sel_sr),))
+            st.rerun()
+
         col_sr1, col_sr2 = st.columns(2)
         with col_sr1:
             ps = get_all('products')
             if not ps.empty:
                 p_sel_name = st.selectbox('Produto para Sub-Receita', ps['name'])
-                p_q = st.number_input('Qtd/Peso', min_value=0.0, step=0.01, format="%.2f", key='sr_pq')
+                c_q, c_u = st.columns(2)
+                p_q = c_q.number_input('Qtd', min_value=0.0, step=0.01, format="%.2f", key='sr_pq')
+                p_u_sel = c_u.selectbox('Unidade', UNITS, key='sr_pu')
                 if st.button('Adicionar à Sub-Receita'):
                     pid = int(ps[ps['name']==p_sel_name]['id'].values[0])
-                    run_query('INSERT OR REPLACE INTO sub_recipe_ingredients VALUES (?, ?, ?)', (int(sel_sr), pid, p_q))
+                    run_query('INSERT OR REPLACE INTO sub_recipe_ingredients VALUES (?, ?, ?, ?)', (int(sel_sr), pid, p_q, p_u_sel))
                     st.success('Item adicionado!')
-            else:
-                st.warning('Cadastre produtos primeiro.')
         with col_sr2:
             conn = get_db_connection()
-            items_sr = pd.read_sql_query('SELECT p.name as Item, sri.quantity as Qtd, p.unit as Und FROM sub_recipe_ingredients sri JOIN products p ON sri.product_id = p.id WHERE sri.sub_recipe_id = ?', conn, params=(int(sel_sr),))
+            items_sr = pd.read_sql_query('SELECT p.id as p_id, p.name as Item, sri.quantity as Qtd, sri.unit as Und FROM sub_recipe_ingredients sri JOIN products p ON sri.product_id = p.id WHERE sri.sub_recipe_id = ?', conn, params=(int(sel_sr),))
             conn.close()
             if not items_sr.empty:
-                items_sr['Qtd'] = items_sr['Qtd'].apply(format_br)
-                st.write('Itens atuais da Sub-Receita:')
-                st.table(items_sr)
+                st.write('Itens atuais:')
+                for _, item in items_sr.iterrows():
+                    c_item, c_btn = st.columns([3, 1])
+                    c_item.write(f"{item['Item']} - {format_br(item['Qtd'])} {item['Und']}")
+                    if c_btn.button('Remover', key=f"rsr_{item['p_id']}"):
+                        run_query('DELETE FROM sub_recipe_ingredients WHERE sub_recipe_id = ? AND product_id = ?', (int(sel_sr), int(item['p_id'])))
+                        st.rerun()
 
 with tabs[1]:
     st.header('📝 Montagem de Receita Final')
@@ -108,28 +145,35 @@ with tabs[1]:
 
     recs = get_all('recipes')
     if not recs.empty:
-        rid = st.selectbox('Selecione a receita:', recs['id'], format_func=lambda x: recs[recs['id']==x]['name'].values[0])
+        col_r_sel, col_r_del = st.columns([3, 1])
+        rid = col_r_sel.selectbox('Selecione a receita:', recs['id'], format_func=lambda x: recs[recs['id']==x]['name'].values[0])
+        if col_r_del.button('Excluir Receita Total'):
+            run_query('DELETE FROM recipes WHERE id = ?', (int(rid),))
+            st.rerun()
+
         c1, c2 = st.columns(2)
         with c1:
-            st.write('**Adicionar Produto Direto**')
+            st.write('**Produtos Diretos**')
             ps = get_all('products')
             if not ps.empty:
                 p_name_rec = st.selectbox('Produto', ps['name'], key='sel_p_rec')
-                pq = st.number_input('Quantidade', min_value=0.0, step=0.01, format="%.2f", key='rpq')
+                c_rq, c_ru = st.columns(2)
+                pq = c_rq.number_input('Qtd', min_value=0.0, step=0.01, format="%.2f", key='rpq')
+                ru = c_ru.selectbox('Unidade', UNITS, key='rpu')
                 if st.button('Vincular Produto'):
                     pid_rec = int(ps[ps['name']==p_name_rec]['id'].values[0])
-                    run_query('INSERT OR REPLACE INTO recipe_ingredients VALUES (?, ?, ?)', (int(rid), pid_rec, pq))
-                    st.success('Produto vinculado!')
+                    run_query('INSERT OR REPLACE INTO recipe_ingredients VALUES (?, ?, ?, ?)', (int(rid), pid_rec, pq, ru))
+                    st.rerun()
         with c2:
-            st.write('**Adicionar Sub-Receita**')
+            st.write('**Sub-Receitas**')
             srs_list = get_all('sub_recipes')
             if not srs_list.empty:
                 sr_name_rec = st.selectbox('Sub-Receita', srs_list['name'])
-                sq = st.number_input('Qtd de Porções/Base', min_value=0.0, step=0.01, format="%.2f", key='rsq')
+                sq = st.number_input('Qtd de Porções', min_value=0.0, step=0.01, format="%.2f", key='rsq')
                 if st.button('Vincular Sub-Receita'):
                     sid_rec = int(srs_list[srs_list['name']==sr_name_rec]['id'].values[0])
                     run_query('INSERT OR REPLACE INTO recipe_sub_recipes VALUES (?, ?, ?)', (int(rid), sid_rec, sq))
-                    st.success('Sub-receita vinculada!')
+                    st.rerun()
 
 with tabs[0]:
     st.header('🔍 Ficha Técnica Detalhada')
@@ -137,7 +181,7 @@ with tabs[0]:
     if not recs_v.empty:
         target = st.selectbox('Abrir Receita:', recs_v['id'], format_func=lambda x: recs_v[recs_v['id']==x]['name'].values[0])
         conn = get_db_connection()
-        prods_final = pd.read_sql_query('SELECT p.name as Item, ri.quantity as Qtd, p.unit as Unidade FROM recipe_ingredients ri JOIN products p ON ri.product_id = p.id WHERE ri.recipe_id = ?', conn, params=(int(target),))
+        prods_final = pd.read_sql_query('SELECT p.name as Item, ri.quantity as Qtd, ri.unit as Unidade FROM recipe_ingredients ri JOIN products p ON ri.product_id = p.id WHERE ri.recipe_id = ?', conn, params=(int(target),))
         subs_final = pd.read_sql_query('SELECT sr.name as SubReceita, rsr.quantity as Qtd, sr.id as sr_id FROM recipe_sub_recipes rsr JOIN sub_recipes sr ON rsr.sub_recipe_id = sr.id WHERE rsr.recipe_id = ?', conn, params=(int(target),))
         conn.close()
 
@@ -152,7 +196,7 @@ with tabs[0]:
             for _, row in subs_final.iterrows():
                 with st.expander(f"{row['SubReceita']} (Qtd: {format_br(row['Qtd'])})"):
                     conn = get_db_connection()
-                    items_in_sr = pd.read_sql_query('SELECT p.name as Componente, sri.quantity as Qtd, p.unit as Und FROM sub_recipe_ingredients sri JOIN products p ON sri.product_id = p.id WHERE sri.sub_recipe_id = ?', conn, params=(int(row['sr_id']),))
+                    items_in_sr = pd.read_sql_query('SELECT p.name as Componente, sri.quantity as Qtd, sri.unit as Und FROM sub_recipe_ingredients sri JOIN products p ON sri.product_id = p.id WHERE sri.sub_recipe_id = ?', conn, params=(int(row['sr_id']),))
                     conn.close()
                     if not items_in_sr.empty:
                         items_in_sr['Qtd'] = items_in_sr['Qtd'].apply(format_br)
@@ -160,4 +204,4 @@ with tabs[0]:
                     else: st.write('Esta sub-receita não possui itens cadastrados.')
         else: st.info('Sem sub-receitas vinculadas.')
     else:
-        st.warning('Cadastre uma receita primeiro na aba de montagem.')
+        st.warning('Cadastre uma receita primeiro.')

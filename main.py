@@ -6,21 +6,27 @@ import pandas as pd
 def init_db():
     conn = sqlite3.connect('recipes.db')
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, unit TEXT NOT NULL, default_quantity REAL DEFAULT 1.0)''')
+    
+    # Criação das tabelas base
+    cursor.execute('''CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, unit TEXT NOT NULL)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS sub_recipes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS recipes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)''')
-    # Alterando tabelas para suportar unidade customizada no vínculo
     cursor.execute('''CREATE TABLE IF NOT EXISTS recipe_ingredients (recipe_id INTEGER, product_id INTEGER, quantity REAL, unit TEXT, PRIMARY KEY (recipe_id, product_id))''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS recipe_sub_recipes (recipe_id INTEGER, sub_recipe_id INTEGER, quantity REAL, PRIMARY KEY (recipe_id, sub_recipe_id))''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS sub_recipe_ingredients (sub_recipe_id INTEGER, product_id INTEGER, quantity REAL, unit TEXT, PRIMARY KEY (sub_recipe_id, product_id))''')
+
+    # MIRAÇÕES: Garantir que colunas novas existam em bancos antigos
+    columns_to_add = [
+        ('products', 'default_quantity', 'REAL DEFAULT 1.0'),
+        ('recipe_ingredients', 'unit', 'TEXT'),
+        ('sub_recipe_ingredients', 'unit', 'TEXT')
+    ]
     
-    # Migração básica caso as colunas 'unit' não existam nas tabelas de junção
-    try:
-        cursor.execute('ALTER TABLE recipe_ingredients ADD COLUMN unit TEXT')
-    except: pass
-    try:
-        cursor.execute('ALTER TABLE sub_recipe_ingredients ADD COLUMN unit TEXT')
-    except: pass
+    for table, col, col_type in columns_to_add:
+        try:
+            cursor.execute(f"SELECT {col} FROM {table} LIMIT 1")
+        except sqlite3.OperationalError:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
 
     conn.commit()
     conn.close()
@@ -52,9 +58,9 @@ def get_all(table):
 
 def format_br(value):
     try:
-        return "{:,.2f}".format(value).replace(",", "X").replace(".", ",").replace("X", ".")
+        return "{:,.2f}".format(float(value)).replace(",", "X").replace(".", ",").replace("X", ".")
     except:
-        return value
+        return "0,00"
 
 UNITS = ['kg', 'g', 'L', 'ml', 'un', 'pct', 'cx','cda']
 
@@ -77,14 +83,17 @@ with tabs[3]:
                 if n:
                     run_query('INSERT INTO products (name, unit, default_quantity) VALUES (?, ?, ?)', (n, u, dq))
                     st.rerun()
-    
+
     with c_p2:
         prods = get_all('products')
         if not prods.empty:
             st.write("Produtos Cadastrados:")
             for _, p_row in prods.iterrows():
                 col_a, col_b = st.columns([3, 1])
-                txt = f"{p_row['name']} - {format_br(p_row['default_quantity'])} {p_row['unit']}"
+                # Uso de .get() ou verificação para evitar KeyError
+                p_qty = p_row['default_quantity'] if 'default_quantity' in p_row else 1.0
+                p_unit = p_row['unit'] if 'unit' in p_row else 'un'
+                txt = f"{p_row['name']} - {format_br(p_qty)} {p_unit}"
                 col_a.write(txt)
                 if col_b.button('Excluir', key=f"del_p_{p_row['id']}"):
                     run_query('DELETE FROM products WHERE id = ?', (int(p_row['id']),))
@@ -119,7 +128,7 @@ with tabs[2]:
                 p_u_sel = c_u.selectbox('Unidade', UNITS, key='sr_pu')
                 if st.button('Adicionar à Sub-Receita'):
                     pid = int(ps[ps['name']==p_sel_name]['id'].values[0])
-                    run_query('INSERT OR REPLACE INTO sub_recipe_ingredients VALUES (?, ?, ?, ?)', (int(sel_sr), pid, p_q, p_u_sel))
+                    run_query('INSERT OR REPLACE INTO sub_recipe_ingredients (sub_recipe_id, product_id, quantity, unit) VALUES (?, ?, ?, ?)', (int(sel_sr), pid, p_q, p_u_sel))
                     st.success('Item adicionado!')
         with col_sr2:
             conn = get_db_connection()
@@ -162,7 +171,7 @@ with tabs[1]:
                 ru = c_ru.selectbox('Unidade', UNITS, key='rpu')
                 if st.button('Vincular Produto'):
                     pid_rec = int(ps[ps['name']==p_name_rec]['id'].values[0])
-                    run_query('INSERT OR REPLACE INTO recipe_ingredients VALUES (?, ?, ?, ?)', (int(rid), pid_rec, pq, ru))
+                    run_query('INSERT OR REPLACE INTO recipe_ingredients (recipe_id, product_id, quantity, unit) VALUES (?, ?, ?, ?)', (int(rid), pid_rec, pq, ru))
                     st.rerun()
         with c2:
             st.write('**Sub-Receitas**')
@@ -172,7 +181,7 @@ with tabs[1]:
                 sq = st.number_input('Qtd de Porções', min_value=0.0, step=0.01, format="%.2f", key='rsq')
                 if st.button('Vincular Sub-Receita'):
                     sid_rec = int(srs_list[srs_list['name']==sr_name_rec]['id'].values[0])
-                    run_query('INSERT OR REPLACE INTO recipe_sub_recipes VALUES (?, ?, ?)', (int(rid), sid_rec, sq))
+                    run_query('INSERT OR REPLACE INTO recipe_sub_recipes (recipe_id, sub_recipe_id, quantity) VALUES (?, ?, ?)', (int(rid), sid_rec, sq))
                     st.rerun()
 
 with tabs[0]:

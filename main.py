@@ -64,20 +64,21 @@ with tabs[3]:
             target_name = st.selectbox('Produto para editar', prods['name'])
             current_p = prods[prods['name'] == target_name].iloc[0]
         
-        with st.form('f_prod', clear_on_submit=False):
+        with st.form('f_prod'):
             name = st.text_input('Nome', value=current_p['name'] if current_p is not None else "")
             q = st.number_input('Qtd Base', value=float(current_p['default_quantity']) if current_p is not None else 1.0, step=0.01)
             u = st.selectbox('Unidade', UNITS, index=UNITS.index(current_p['unit']) if current_p is not None else 0)
-            c_btn1, c_btn2 = st.columns(2)
-            if c_btn1.form_submit_button('Salvar Produto'):
+            b1, b2 = st.columns(2)
+            if b1.form_submit_button('Salvar Produto'):
                 if name:
                     if mode == 'Novo': run_query('INSERT INTO products (name, unit, default_quantity) VALUES (?,?,?)', (name, u, q))
                     else: run_query('UPDATE products SET name=?, unit=?, default_quantity=? WHERE id=?', (name, u, q, int(current_p['id'])))
                     st.rerun()
-            if c_btn2.form_submit_button('Limpar Campos'): st.rerun()
+            if b2.form_submit_button('Limpar Campos'): st.rerun()
     with c2:
         st.subheader('Lista de Produtos')
-        st.dataframe(prods[['name', 'default_quantity', 'unit']], use_container_width=True, hide_index=True) if not prods.empty else st.info('Vazio')
+        if not prods.empty: st.dataframe(prods[['name', 'default_quantity', 'unit']], use_container_width=True, hide_index=True)
+        else: st.info('Nenhum produto cadastrado.')
 
 # --- ABA SUB-RECEITAS ---
 with tabs[2]:
@@ -86,7 +87,7 @@ with tabs[2]:
     c_s1, c_s2 = st.columns([1, 2])
     with c_s1:
         st.subheader('Gerenciar Sub-Receita')
-        mode_sr = st.radio('Ação Sub-Receita', ['Nova', 'Editar'], horizontal=True)
+        mode_sr = st.radio('Ação Sub-Receita', ['Nova', 'Editar'], horizontal=True, key='msr')
         curr_sr = None
         if mode_sr == 'Editar' and not srs.empty:
             sel_sr_name = st.selectbox('Selecionar Sub-Receita', srs['name'])
@@ -94,28 +95,30 @@ with tabs[2]:
         
         with st.form('f_sr'):
             ns = st.text_input('Nome da Sub-Receita', value=curr_sr['name'] if curr_sr is not None else "")
-            c_sr_b1, c_sr_b2 = st.columns(2)
-            if c_sr_b1.form_submit_button('Salvar'):
+            b1, b2 = st.columns(2)
+            if b1.form_submit_button('Salvar Sub-Receita'):
                 if ns:
                     if mode_sr == 'Nova': run_query('INSERT INTO sub_recipes (name) VALUES (?)', (ns,))
                     else: run_query('UPDATE sub_recipes SET name=? WHERE id=?', (ns, int(curr_sr['id'])))
                     st.rerun()
-            if c_sr_b2.form_submit_button('Limpar'): st.rerun()
+            if b2.form_submit_button('Limpar'): st.rerun()
             
         if mode_sr == 'Editar' and curr_sr is not None:
             st.write('---')
             pl = get_all('products')
             with st.form('add_item_sr'):
-                p_sel = st.selectbox('Adicionar/Atualizar Ingrediente', pl['name'])
+                st.write('**Adicionar Item**')
+                p_sel = st.selectbox('Ingrediente', pl['name'])
                 sq = st.number_input('Qtd', min_value=0.0, step=0.01)
                 su = st.selectbox('Unidade', UNITS)
-                if st.form_submit_button('Vincular a Sub-Receita'):
+                if st.form_submit_button('Vincular'):
                     pid = int(pl[pl['name']==p_sel]['id'].values[0])
                     run_query('INSERT OR REPLACE INTO sub_recipe_ingredients (sub_recipe_id, product_id, quantity, unit) VALUES (?,?,?,?)', (int(curr_sr['id']), pid, sq, su))
                     st.rerun()
     with c_s2:
         st.subheader('Lista de Sub-Receitas')
-        st.dataframe(srs[['name']], use_container_width=True, hide_index=True) if not srs.empty else st.info('Vazio')
+        if not srs.empty: st.dataframe(srs[['name']], use_container_width=True, hide_index=True)
+        else: st.info('Nenhuma sub-receita.')
 
 # --- ABA MONTAR RECEITA ---
 with tabs[1]:
@@ -124,7 +127,7 @@ with tabs[1]:
     c_r1, c_r2 = st.columns([1, 2])
     with c_r1:
         st.subheader('Gerenciar Receita')
-        mode_r = st.radio('Ação Receita', ['Nova', 'Editar'], horizontal=True)
+        mode_r = st.radio('Ação Receita', ['Nova', 'Editar'], horizontal=True, key='mr')
         curr_r = None
         if mode_r == 'Editar' and not recs.empty:
             sel_r_name = st.selectbox('Selecionar Receita', recs['name'])
@@ -132,46 +135,49 @@ with tabs[1]:
             
         with st.form('f_r'):
             nr = st.text_input('Nome da Receita', value=curr_r['name'] if curr_r is not None else "")
-            c_r_b1, c_r_b2 = st.columns(2)
-            if c_r_b1.form_submit_button('Salvar'):
+            b1, b2 = st.columns(2)
+            if b1.form_submit_button('Salvar Receita'):
                 if nr:
                     if mode_r == 'Nova': run_query('INSERT INTO recipes (name) VALUES (?)', (nr,))
                     else: run_query('UPDATE recipes SET name=? WHERE id=?', (nr, int(curr_r['id'])))
                     st.rerun()
-            if c_r_b2.form_submit_button('Limpar'): st.rerun()
+            if b2.form_submit_button('Limpar'): st.rerun()
             
         if mode_r == 'Editar' and curr_r is not None:
             st.write('---')
-            col_a, col_b = st.columns(2)
-            with col_a:
+            ca, cb = st.columns(2)
+            with ca:
                 pl = get_all('products')
                 with st.form('ri'):
-                    p_ri = st.selectbox('Add Ingrediente', pl['name'])
-                    q_ri = st.number_input('Qtd', step=0.01)
-                    u_ri = st.selectbox('Unidade', UNITS)
-                    if st.form_submit_button('Vincular'):
+                    st.write('**Ingrediente**')
+                    p_ri = st.selectbox('Produto', pl['name'])
+                    q_ri = st.number_input('Qtd', step=0.01, key='q_m')
+                    u_ri = st.selectbox('Unidade', UNITS, key='u_m')
+                    if st.form_submit_button('Add'):
                         pid = int(pl[pl['name']==p_ri]['id'].values[0])
                         run_query('INSERT OR REPLACE INTO recipe_ingredients (recipe_id, product_id, quantity, unit) VALUES (?,?,?,?)', (int(curr_r['id']), pid, q_ri, u_ri))
                         st.rerun()
-            with col_b:
+            with cb:
                 sl = get_all('sub_recipes')
                 with st.form('rsr'):
-                    s_sel = st.selectbox('Add Sub-Receita', sl['name'])
-                    sq_rsr = st.number_input('Qtd Porções', step=0.1)
-                    if st.form_submit_button('Vincular'):
+                    st.write('**Sub-Receita**')
+                    s_sel = st.selectbox('Sub', sl['name'])
+                    sq_rsr = st.number_input('Qtd', step=0.1, key='qs_m')
+                    if st.form_submit_button('Add '):
                         sid = int(sl[sl['name']==s_sel]['id'].values[0])
                         run_query('INSERT OR REPLACE INTO recipe_sub_recipes (recipe_id, sub_recipe_id, quantity) VALUES (?,?,?)', (int(curr_r['id']), sid, sq_rsr))
                         st.rerun()
     with c_r2:
         st.subheader('Lista de Receitas')
-        st.dataframe(recs[['name']], use_container_width=True, hide_index=True) if not recs.empty else st.info('Vazio')
+        if not recs.empty: st.dataframe(recs[['name']], use_container_width=True, hide_index=True)
+        else: st.info('Nenhuma receita.')
 
 # --- ABA FICHA TÉCNICA ---
 with tabs[0]:
     st.header('🔍 Ficha Técnica')
     rv = get_all('recipes')
     if not rv.empty:
-        tid = st.selectbox('Visualizar Receita:', rv['id'], format_func=lambda x: rv[rv['id']==x]['name'].values[0])
+        tid = st.selectbox('Visualizar:', rv['id'], format_func=lambda x: rv[rv['id']==x]['name'].values[0])
         conn = get_db_connection()
         ing = pd.read_sql_query('SELECT p.name as Item, ri.quantity as Qtd, ri.unit as Und FROM recipe_ingredients ri JOIN products p ON ri.product_id = p.id WHERE ri.recipe_id = ?', conn, params=(int(tid),))
         sub = pd.read_sql_query('SELECT sr.name as Sub, rsr.quantity as Qtd, sr.id FROM recipe_sub_recipes rsr JOIN sub_recipes sr ON rsr.sub_recipe_id = sr.id WHERE rsr.recipe_id = ?', conn, params=(int(tid),))
@@ -181,7 +187,7 @@ with tabs[0]:
         if not ing.empty: st.table(ing)
         if not sub.empty:
             for _, r in sub.iterrows():
-                with st.expander(f"Sub-Receita: {r['Sub']} ({r['Qtd']} un)"):
+                with st.expander(f"{r['Sub']} ({r['Qtd']} un)"):
                     conn = get_db_connection()
                     det = pd.read_sql_query('SELECT p.name as Item, sri.quantity as Qtd, sri.unit as Und FROM sub_recipe_ingredients sri JOIN products p ON sri.product_id = p.id WHERE sri.sub_recipe_id = ?', conn, params=(int(r['id']),))
                     conn.close()
